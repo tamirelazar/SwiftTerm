@@ -12,8 +12,24 @@ import AppKit
 import UIKit
 #endif
 
+/// Identifies a font by the font object itself rather than by its PostScript
+/// name. Copying the name allocated a CFString and bridged it to a Swift
+/// String on every glyph and shaper lookup; CFEqual/CFHash answer the same
+/// question — is this the same font — without allocating.
+struct FontKey: Hashable {
+    let font: CTFont
+
+    static func == (lhs: FontKey, rhs: FontKey) -> Bool {
+        return CFEqual(lhs.font, rhs.font)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(CFHash(font))
+    }
+}
+
 struct GlyphKey: Hashable {
-    let fontName: String
+    let font: FontKey
     let size: CGFloat
     let glyph: CGGlyph
 }
@@ -1658,7 +1674,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     private func glyphEntry(for font: CTFont, glyph: CGGlyph) -> GlyphEntry? {
-        let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String,
+        let key = GlyphKey(font: FontKey(font: font),
                            size: CTFontGetSize(font),
                            glyph: glyph)
         if let cached = glyphCache[key] {
@@ -1689,7 +1705,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     private func scaledFontFor(font: CTFont, scale: CGFloat) -> CTFont {
-        let key = GlyphKey(fontName: CTFontCopyPostScriptName(font) as String,
+        let key = GlyphKey(font: FontKey(font: font),
                            size: CTFontGetSize(font) * scale,
                            glyph: 0)
         if let cached = scaledFontCache[key] {
@@ -2005,7 +2021,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     private struct ShaperKey: Hashable {
-        let fontName: String
+        let font: FontKey
         let fontSize: CGFloat
         let text: String
     }
@@ -2048,7 +2064,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             guard !text.isEmpty else {
                 return nil
             }
-            let key = ShaperKey(fontName: CTFontCopyPostScriptName(font) as String,
+            let key = ShaperKey(font: FontKey(font: font),
                                 fontSize: CTFontGetSize(font),
                                 text: text)
             if let cached = cache[key] {
