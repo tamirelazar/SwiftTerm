@@ -296,6 +296,7 @@ struct ViewLineInfo {
     var images: [TerminalImage]?
     var kittyPlaceholders: [KittyPlaceholderCell]
     var blockElements: [BlockElementRenderItem]
+    var brailleGlyphs: [BrailleRenderItem]
     var boxDrawings: [BoxDrawingRenderItem]
     var powerlineGlyphs: [PowerlineRenderItem]
 }
@@ -1191,6 +1192,7 @@ extension TerminalView {
         var previousPlaceholder: KittyPlaceholderCell?
         var previousPlaceholderAttribute: Attribute?
         var blockElements: [BlockElementRenderItem] = []
+        var brailleGlyphs: [BrailleRenderItem] = []
         var boxDrawings: [BoxDrawingRenderItem] = []
         var powerlineGlyphs: [PowerlineRenderItem] = []
         
@@ -1323,9 +1325,35 @@ extension TerminalView {
             let renderCodePoint = character.unicodeScalars.count == 1
                 ? character.unicodeScalars.first!.value : UInt32(ch.code)
 
+            // Renders braille patterns independently of the font: the 2x4 dot
+            // grid is drawn as geometry, which tiles exactly across cells where
+            // a font's braille glyph can only approximate it. Tested first
+            // because braille is the character class that dominates the frames
+            // this renderer is tuned for.
+            // U+2800...U+28FF
+            if !blinkHidden, customBrailleGlyphs,
+               BrailleRenderer.shouldRender(codePoint: renderCodePoint) {
+                if renderCodePoint == BrailleRenderer.lowerBoundary {
+                    // U+2800 is the blank pattern. It has nothing to draw, so it
+                    // stays in the text batch as a space rather than breaking the
+                    // run and costing a transparent quad: dense braille output is
+                    // full of blanks.
+                    pendingText.append(" ")
+                    pendingCellLengths.append(1)
+                } else {
+                    flushPending()
+                    brailleGlyphs.append(BrailleRenderItem(column: visualCol,
+                                                           columnWidth: width,
+                                                           codePoint: renderCodePoint,
+                                                           foregroundColor: currentStyle.foregroundColor))
+                    builder?.append(text: " ", attributes: currentAttributes, style: currentStyle,
+                                    cellUTF16Lengths: [1])
+                }
+                previousPlaceholder = nil
+                previousPlaceholderAttribute = nil
             // Render Powerline separators independently of the font so their
             // joining edge shares the background's exact pixel boundary.
-            if !blinkHidden && PowerlineRenderer.shouldRender(codePoint: renderCodePoint,
+            } else if !blinkHidden && PowerlineRenderer.shouldRender(codePoint: renderCodePoint,
                                               customGlyphsEnabled: customBlockGlyphs) {
                 flushPending()
                 let fgColor = currentStyle.foregroundColor
@@ -1436,6 +1464,7 @@ extension TerminalView {
                             images: line.images,
                             kittyPlaceholders: kittyPlaceholders,
                             blockElements: blockElements,
+                            brailleGlyphs: brailleGlyphs,
                             boxDrawings: boxDrawings,
                             powerlineGlyphs: powerlineGlyphs)
     }
@@ -1841,6 +1870,31 @@ extension TerminalView {
         context.restoreGState()
     }
 
+    private func drawBrailleGlyphs(_ items: [BrailleRenderItem], lineOrigin: CGPoint, in context: CGContext) {
+        guard !items.isEmpty else {
+            return
+        }
+        context.saveGState()
+        // The dots are rounded squares a couple of points across: they need
+        // anti-aliasing regardless of how the block glyphs are configured.
+        context.setShouldAntialias(true)
+        context.setAllowsAntialiasing(true)
+
+        let cellHeight = cellDimension.height
+        for item in items {
+            let cellSize = CGSize(width: cellDimension.width * CGFloat(item.columnWidth),
+                                  height: cellHeight)
+            let cellOrigin = CGPoint(x: lineOrigin.x + CGFloat(item.column) * cellDimension.width,
+                                     y: lineOrigin.y)
+            context.setFillColor(item.foregroundColor.cgColor)
+            BrailleRenderer.draw(codePoint: item.codePoint,
+                                 in: context,
+                                 cellOrigin: cellOrigin,
+                                 cellSize: cellSize)
+        }
+        context.restoreGState()
+    }
+
     private func drawBoxDrawings(_ items: [BoxDrawingRenderItem], lineOrigin: CGPoint, in context: CGContext) {
         guard !items.isEmpty else {
             return
@@ -2166,6 +2220,10 @@ extension TerminalView {
 
             if !lineInfo.blockElements.isEmpty {
                 drawBlockElements(lineInfo.blockElements, lineOrigin: lineOrigin, in: context)
+            }
+
+            if !lineInfo.brailleGlyphs.isEmpty {
+                drawBrailleGlyphs(lineInfo.brailleGlyphs, lineOrigin: lineOrigin, in: context)
             }
 
             if !lineInfo.powerlineGlyphs.isEmpty {

@@ -1059,7 +1059,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let underlineThickness = max(round(scale * terminalView.fontSet.underlineThickness()) / scale, 0.5)
         let decorationCellWidth = ceil(cellWidth)
 
-        if !lineInfo.boxDrawings.isEmpty || !lineInfo.blockElements.isEmpty || !lineInfo.powerlineGlyphs.isEmpty {
+        if !lineInfo.boxDrawings.isEmpty || !lineInfo.blockElements.isEmpty || !lineInfo.brailleGlyphs.isEmpty || !lineInfo.powerlineGlyphs.isEmpty {
             let boxThicknessScale: CGFloat = 1.35
             let minThicknessPx = max(1, Int(round(scale)))
             let baseThicknessPx = max(minThicknessPx,
@@ -1142,6 +1142,44 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 let (tx0, ty0, tx1, ty1) = transformRect(x0: x0, y0: y0, x1: x1, y1: y1)
                 if let clipped = self.clipRect(tx0, ty0, tx1, ty1, u0, v0, u1, v1, clipRect) {
                     let color = colorToSIMD(element.foregroundColor)
+                    glyphCellsGray.append(makeTextCell(x0: clipped.x0,
+                                                       y0: clipped.y0,
+                                                       x1: clipped.x1,
+                                                       y1: clipped.y1,
+                                                       u0: clipped.u0,
+                                                       v0: clipped.v0,
+                                                       u1: clipped.u1,
+                                                       v1: clipped.v1,
+                                                       color: color))
+                }
+            }
+
+            // Braille dots are always anti-aliased and always placed at the
+            // cell's exact fractional origin: rounding the placement to whole
+            // pixels would shift dots by up to half a pixel per cell and band
+            // the lattice, which is precisely what drawing it ourselves avoids.
+            for item in lineInfo.brailleGlyphs {
+                let itemWidthPx = max(1, Int(round(cellWidthPx * CGFloat(item.columnWidth))))
+                guard let entry = customGlyphEntry(codePoint: item.codePoint,
+                                                   cellWidthPx: itemWidthPx,
+                                                   cellHeightPx: baseCellHeightPx,
+                                                   scale: scale,
+                                                   baseThicknessPx: 0,
+                                                   antiAlias: true) else {
+                    continue
+                }
+                let atlasSize = Float(grayscaleAtlas.size)
+                let u0 = Float(entry.region.x) / atlasSize
+                let v0 = Float(entry.region.y) / atlasSize
+                let u1 = Float(entry.region.x + entry.region.width) / atlasSize
+                let v1 = Float(entry.region.y + entry.region.height) / atlasSize
+                let x0 = lineOriginPx.x + CGFloat(item.column) * cellWidthPx
+                let y0 = lineOriginPx.y
+                let x1 = x0 + cellWidthPx * CGFloat(item.columnWidth)
+                let y1 = y0 + CGFloat(baseCellHeightPx)
+                let (tx0, ty0, tx1, ty1) = transformRect(x0: x0, y0: y0, x1: x1, y1: y1)
+                if let clipped = self.clipRect(tx0, ty0, tx1, ty1, u0, v0, u1, v1, clipRect) {
+                    let color = colorToSIMD(item.foregroundColor)
                     glyphCellsGray.append(makeTextCell(x0: clipped.x0,
                                                        y0: clipped.y0,
                                                        x1: clipped.x1,
@@ -1833,6 +1871,16 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                         scale: scale,
                                         color: TTColor.white,
                                         baseThicknessPx: baseThicknessPx)
+                return true
+            case BrailleRenderer.lowerBoundary...BrailleRenderer.upperBoundary:
+                context.setShouldAntialias(true)
+                context.setAllowsAntialiasing(true)
+                context.scaleBy(x: scale, y: scale)
+                context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+                BrailleRenderer.draw(codePoint: codePoint,
+                                     in: context,
+                                     cellOrigin: cellOrigin,
+                                     cellSize: cellSize)
                 return true
             case UInt32(BlockElementMapping.lowerBoundary)...UInt32(BlockElementMapping.upperBoundary):
                 guard let rects = BlockElementMapping.rects(for: codePoint) else {
