@@ -319,8 +319,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     // Attribute dictionary, maps a console attribute (color, flags) to the corresponding dictionary
     // of attributes for an NSAttributedString
-    var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
-    var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    var attributes: [Attribute: RunAttributes] = [:]
+    var urlAttributes: [Attribute: RunAttributes] = [:]
     
     
     // Cache for the colors in the 0..255 range

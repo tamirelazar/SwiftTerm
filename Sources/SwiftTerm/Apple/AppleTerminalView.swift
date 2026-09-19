@@ -59,6 +59,39 @@ public enum LinkHighlightMode {
     case alwaysWithModifier
 }
 
+/// The same drawing attributes as the run's dictionary, in typed fields.
+///
+/// The Metal path reads these instead of subscripting the dictionary: an
+/// `NSAttributedString.Key` wraps a Cocoa-backed constant string, so every
+/// lookup bridged and hashed one, and the row build performs roughly eight of
+/// them per run. The CoreGraphics path keeps using the dictionary, which
+/// CoreText needs anyway.
+struct RunStyle {
+    var font: TTFont
+    var foregroundColor: TTColor
+    var backgroundColor: TTColor
+    /// Set only while the run is inside the selection; it wins over
+    /// `backgroundColor`.
+    var selectionBackgroundColor: TTColor?
+    var underlineColor: TTColor?
+    /// `NSUnderlineStyle` raw value; zero or nil means no underline.
+    var underlineStyle: NSUnderlineStyle.RawValue?
+    /// The terminal's own underline variant, which carries the curly and
+    /// dotted styles `NSUnderlineStyle` cannot express.
+    var terminalUnderlineStyle: UnderlineStyle?
+    var strikethroughColor: TTColor?
+    /// `NSUnderlineStyle` raw value; zero or nil means no strikethrough.
+    var strikethroughStyle: NSUnderlineStyle.RawValue?
+}
+
+/// A cell attribute's rendering, in both forms: the dictionary CoreText
+/// consumes and the typed fields the Metal path reads. Built and cached
+/// together, so the typed form costs nothing per run.
+struct RunAttributes {
+    let dictionary: [NSAttributedString.Key: Any]
+    let style: RunStyle
+}
+
 /// A rendered fragment that starts at a specific column and contains a run of
 /// characters that all occupy the same number of columns.
 /// One batch of cells sharing a single attribute dictionary. The row builder
@@ -67,6 +100,7 @@ public enum LinkHighlightMode {
 struct ViewLineRun {
     let text: String
     let attributes: [NSAttributedString.Key: Any]
+    let style: RunStyle
     /// Offset of this run's first UTF-16 unit within the segment.
     let utf16Offset: Int
 }
@@ -918,6 +952,16 @@ extension TerminalView {
     //
     func getAttributes (_ attribute: Attribute, withUrl: Bool) -> [NSAttributedString.Key:Any]?
     {
+        return getRunAttributes (attribute, withUrl: withUrl)?.dictionary
+    }
+
+    //
+    // Given a vt100 attribute, return its rendering in both forms: the
+    // attribute dictionary and the typed fields. Both are derived from the
+    // same locals and cached together, so the typed form is free.
+    //
+    func getRunAttributes (_ attribute: Attribute, withUrl: Bool) -> RunAttributes?
+    {
         if let result = withUrl ? urlAttributes [attribute] : attributes [attribute] {
             return result
         }
@@ -968,6 +1012,7 @@ extension TerminalView {
             .foregroundColor: fgColor,
             .backgroundColor: bgColor
         ]
+        var style = RunStyle(font: tf, foregroundColor: fgColor, backgroundColor: bgColor)
         if flags.contains (.underline) {
             let underlineColor = attribute.underlineColor.map {
                 mapColor(color: $0, isFg: true, isBold: isBold, useBrightColors: useBrightColors)
@@ -976,30 +1021,41 @@ extension TerminalView {
             nsattr [.underlineColor] = underlineColor
             nsattr [.underlineStyle] = nsUnderlineStyle(underlineVariant).rawValue
             nsattr [SwiftTermUnderlineStyleKey] = Int(underlineVariant.rawValue)
+            style.underlineColor = underlineColor
+            style.underlineStyle = nsUnderlineStyle(underlineVariant).rawValue
+            style.terminalUnderlineStyle = underlineVariant
         }
         if flags.contains (.crossedOut) {
             nsattr [.strikethroughColor] = fgColor
             nsattr [.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+            style.strikethroughColor = fgColor
+            style.strikethroughStyle = NSUnderlineStyle.single.rawValue
         }
 
         if withUrl {
             nsattr [.underlineStyle] = NSUnderlineStyle.single.rawValue
             nsattr [.underlineColor] = fgColor
             nsattr [SwiftTermUnderlineStyleKey] = Int(UnderlineStyle.dashed.rawValue)
+            style.underlineStyle = NSUnderlineStyle.single.rawValue
+            style.underlineColor = fgColor
+            style.terminalUnderlineStyle = .dashed
+        }
 
+        let result = RunAttributes(dictionary: nsattr, style: style)
+        if withUrl {
             // Add to cache; truecolor attributes are unbounded, so cap it
             if urlAttributes.count >= 4096 {
                 urlAttributes.removeAll(keepingCapacity: true)
             }
-            urlAttributes [attribute] = nsattr
+            urlAttributes [attribute] = result
         } else {
             // Just add to cache; truecolor attributes are unbounded, so cap it
             if attributes.count >= 4096 {
                 attributes.removeAll(keepingCapacity: true)
             }
-            attributes [attribute] = nsattr
+            attributes [attribute] = result
         }
-        return nsattr
+        return result
     }
 
     private func kittyImageFromRgba(bytes: [UInt8], width: Int, height: Int) -> TTImage? {
@@ -1083,8 +1139,9 @@ extension TerminalView {
         /// Appends a batch of text; `cellUTF16Lengths` holds one entry per
         /// terminal cell in the batch (its text length in UTF-16 units).
         mutating func append(text: String, attributes: [NSAttributedString.Key: Any],
+                             style: RunStyle,
                              cellUTF16Lengths: [Int]) {
-            runs.append(ViewLineRun(text: text, attributes: attributes, utf16Offset: utf16Length))
+            runs.append(ViewLineRun(text: text, attributes: attributes, style: style, utf16Offset: utf16Length))
             utf16Length += text.utf16.count
             characterCount += 1
             for length in cellUTF16Lengths {
@@ -1141,14 +1198,15 @@ extension TerminalView {
         var pendingText = ""
         var pendingCellLengths: [Int] = []
         var pendingAttrs: [NSAttributedString.Key: Any]? = nil
+        var pendingStyle: RunStyle? = nil
         var lastAttr: Attribute? = nil
         var lastHasUrl = false
         var lastIsSelected = false
         var lastBlinkHidden = false
 
         func flushPending() {
-            if !pendingText.isEmpty, let attrs = pendingAttrs {
-                builder?.append(text: pendingText, attributes: attrs,
+            if !pendingText.isEmpty, let attrs = pendingAttrs, let style = pendingStyle {
+                builder?.append(text: pendingText, attributes: attrs, style: style,
                                 cellUTF16Lengths: pendingCellLengths)
                 pendingText = ""
                 pendingCellLengths = []
@@ -1170,7 +1228,7 @@ extension TerminalView {
             let width = max(1, Int(ch.width))
             let attr = ch.attribute
             let hasUrl = shouldUnderlineLink(row: row, column: col, width: width, cell: ch)
-            guard let attributes = getAttributes(attr, withUrl: hasUrl) else {
+            guard let runAttributes = getRunAttributes(attr, withUrl: hasUrl) else {
                 flushPending()
                 if let finished = builder?.buildIfNeeded() {
                     segments.append(finished)
@@ -1207,15 +1265,20 @@ extension TerminalView {
                 lastHasUrl = hasUrl
                 lastIsSelected = isSelected
                 lastBlinkHidden = blinkHidden
-                var batchAttributes = attributes
+                var batchAttributes = runAttributes.dictionary
+                var batchStyle = runAttributes.style
                 if isSelected {
                     batchAttributes[.selectionBackgroundColor] = selectedTextBackgroundColor
                     batchAttributes[.foregroundColor] = selectedTextForegroundColor
+                    batchStyle.selectionBackgroundColor = selectedTextBackgroundColor
+                    batchStyle.foregroundColor = selectedTextForegroundColor
                     if batchAttributes[.underlineColor] != nil {
                         batchAttributes[.underlineColor] = selectedTextForegroundColor
+                        batchStyle.underlineColor = selectedTextForegroundColor
                     }
                     if batchAttributes[.strikethroughColor] != nil {
                         batchAttributes[.strikethroughColor] = selectedTextForegroundColor
+                        batchStyle.strikethroughColor = selectedTextForegroundColor
                     }
                 }
                 if blinkHidden {
@@ -1225,6 +1288,12 @@ extension TerminalView {
                     batchAttributes.removeValue(forKey: .strikethroughColor)
                     batchAttributes.removeValue(forKey: .strikethroughStyle)
                     batchAttributes.removeValue(forKey: SwiftTermUnderlineStyleKey)
+                    batchStyle.foregroundColor = TTColor.clear
+                    batchStyle.underlineColor = nil
+                    batchStyle.underlineStyle = nil
+                    batchStyle.terminalUnderlineStyle = nil
+                    batchStyle.strikethroughColor = nil
+                    batchStyle.strikethroughStyle = nil
                 }
                 if needsDirectionOverride {
                     // SwiftTerm owns cell placement. A BiDi layout is already in
@@ -1235,8 +1304,10 @@ extension TerminalView {
                     batchAttributes[ltrWritingDirectionKey] = ltrWritingDirectionValue
                 }
                 pendingAttrs = batchAttributes
+                pendingStyle = batchStyle
             }
             let currentAttributes = pendingAttrs!
+            let currentStyle = pendingStyle!
 
             let character: Character = displayOverride ?? (ch.code == 0 ? " " : terminal.getCharacter(for: ch))
             let renderCodePoint = character.unicodeScalars.count == 1
@@ -1247,12 +1318,12 @@ extension TerminalView {
             if !blinkHidden && PowerlineRenderer.shouldRender(codePoint: renderCodePoint,
                                               customGlyphsEnabled: customBlockGlyphs) {
                 flushPending()
-                let fgColor = (currentAttributes[.foregroundColor] as? TTColor) ?? effectiveNativeForegroundColor
+                let fgColor = currentStyle.foregroundColor
                 powerlineGlyphs.append(PowerlineRenderItem(column: visualCol,
                                                            columnWidth: width,
                                                            codePoint: renderCodePoint,
                                                            foregroundColor: fgColor))
-                builder?.append(text: " ", attributes: currentAttributes,
+                builder?.append(text: " ", attributes: currentAttributes, style: currentStyle,
                                 cellUTF16Lengths: [1])
                 previousPlaceholder = nil
                 previousPlaceholderAttribute = nil
@@ -1262,12 +1333,12 @@ extension TerminalView {
                renderCodePoint >= UInt32(BoxDrawingRenderer.lowerBoundary),
                renderCodePoint <= UInt32(BoxDrawingRenderer.upperBoundary) {
                 flushPending()
-                let fgColor = (currentAttributes[.foregroundColor] as? TTColor) ?? effectiveNativeForegroundColor
+                let fgColor = currentStyle.foregroundColor
                 boxDrawings.append(BoxDrawingRenderItem(column: visualCol,
                                                         columnWidth: width,
                                                         codePoint: renderCodePoint,
                                                         foregroundColor: fgColor))
-                builder?.append(text: " ", attributes: currentAttributes, cellUTF16Lengths: [1])
+                builder?.append(text: " ", attributes: currentAttributes, style: currentStyle, cellUTF16Lengths: [1])
                 previousPlaceholder = nil
                 previousPlaceholderAttribute = nil
             // Renders block elements independently of the font
@@ -1277,13 +1348,13 @@ extension TerminalView {
                        && renderCodePoint <= UInt32(BlockElementMapping.upperBoundary)),
                       let rects = BlockElementMapping.rects(for: renderCodePoint) {
                 flushPending()
-                let fgColor = (currentAttributes[.foregroundColor] as? TTColor) ?? effectiveNativeForegroundColor
+                let fgColor = currentStyle.foregroundColor
                 blockElements.append(BlockElementRenderItem(column: visualCol,
                                                             columnWidth: width,
                                                             codePoint: renderCodePoint,
                                                             rects: rects,
                                                             foregroundColor: fgColor))
-                builder?.append(text: " ", attributes: currentAttributes, cellUTF16Lengths: [1])
+                builder?.append(text: " ", attributes: currentAttributes, style: currentStyle, cellUTF16Lengths: [1])
                 previousPlaceholder = nil
                 previousPlaceholderAttribute = nil
             } else if let placeholder = KittyPlaceholderDecoder.decode(character: character,
@@ -1294,7 +1365,7 @@ extension TerminalView {
                                                                        previousAttribute: previousPlaceholderAttribute) {
                 flushPending()
                 kittyPlaceholders.append(placeholder)
-                builder?.append(text: " ", attributes: currentAttributes, cellUTF16Lengths: [1])
+                builder?.append(text: " ", attributes: currentAttributes, style: currentStyle, cellUTF16Lengths: [1])
                 previousPlaceholder = placeholder
                 previousPlaceholderAttribute = attr
             } else if !blinkHidden && bidiLayout != nil && TerminalBidi.needsCellIsolation(character) {
@@ -1311,9 +1382,12 @@ extension TerminalView {
                 // otherwise every one of these single-cell CTLines re-runs the
                 // font cascade to discover the same Arabic-capable font.
                 var isolatedAttributes = currentAttributes
-                let baseFont = (currentAttributes[.font] as? TTFont) ?? fontSet.normal
-                isolatedAttributes[.font] = resolvedFont(for: character, base: baseFont)
+                var isolatedStyle = currentStyle
+                let isolatedFont = resolvedFont(for: character, base: currentStyle.font)
+                isolatedAttributes[.font] = isolatedFont
+                isolatedStyle.font = isolatedFont
                 builder?.append(text: String(character), attributes: isolatedAttributes,
+                                style: isolatedStyle,
                                 cellUTF16Lengths: [character.utf16.count])
                 if let finished = builder?.buildIfNeeded() {
                     segments.append(finished)
