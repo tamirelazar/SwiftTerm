@@ -1635,23 +1635,25 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private func buildShapedSegments(_ segments: [ViewLineSegment], terminalView: TerminalView) -> [ShapedSegment] {
         var shapedSegments: [ShapedSegment] = []
         for segment in segments {
-            guard segment.attributedString.length > 0 else {
+            guard segment.utf16Length > 0 else {
                 continue
             }
-            let fullString = segment.attributedString.string as NSString
+            // The row builder already batched the line into runs of equal
+            // attributes, so shape those directly. Round-tripping them through
+            // an attributed string and enumerateAttributes rebuilt the same
+            // boundaries and bridged every attribute dictionary back out.
             var shapedRuns: [ShapedRun] = []
-            segment.attributedString.enumerateAttributes(in: NSRange(location: 0, length: segment.attributedString.length),
-                                                         options: []) { attributes, range, _ in
-                let text = fullString.substring(with: range)
-                guard !text.isEmpty else {
-                    return
+            shapedRuns.reserveCapacity(segment.runs.count)
+            for run in segment.runs {
+                guard !run.text.isEmpty else {
+                    continue
                 }
-                let runFont = attributes[.font] as? TTFont ?? terminalView.fontSet.normal
-                guard let shaped = shaperCache.shape(text: text, font: runFont as CTFont) else {
-                    return
+                let runFont = run.attributes[.font] as? TTFont ?? terminalView.fontSet.normal
+                guard let shaped = shaperCache.shape(text: run.text, font: runFont as CTFont) else {
+                    continue
                 }
-                shapedRuns.append(ShapedRun(attributes: attributes,
-                                            utf16Offset: range.location,
+                shapedRuns.append(ShapedRun(attributes: run.attributes,
+                                            utf16Offset: run.utf16Offset,
                                             shaperRun: shaped))
             }
             if !shapedRuns.isEmpty {

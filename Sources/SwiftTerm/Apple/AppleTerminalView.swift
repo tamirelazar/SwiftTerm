@@ -61,11 +61,54 @@ public enum LinkHighlightMode {
 
 /// A rendered fragment that starts at a specific column and contains a run of
 /// characters that all occupy the same number of columns.
+/// One batch of cells sharing a single attribute dictionary. The row builder
+/// produces these directly, so the Metal path can shape them without ever
+/// materializing an attributed string.
+struct ViewLineRun {
+    let text: String
+    let attributes: [NSAttributedString.Key: Any]
+    /// Offset of this run's first UTF-16 unit within the segment.
+    let utf16Offset: Int
+}
+
+/// Builds a segment's attributed string on demand. Only the CoreGraphics draw
+/// path needs one; constructing it per row cost more than any other single
+/// step of the Metal row build, because every batch allocated an
+/// NSAttributedString whose attribute dictionary was bridged and interned.
+final class LazyAttributedString {
+    private let runs: [ViewLineRun]
+    private var cached: NSAttributedString?
+
+    init(runs: [ViewLineRun]) {
+        self.runs = runs
+    }
+
+    var value: NSAttributedString {
+        if let cached {
+            return cached
+        }
+        let built = NSMutableAttributedString()
+        for run in runs {
+            built.append(NSAttributedString(string: run.text, attributes: run.attributes))
+        }
+        cached = built
+        return built
+    }
+}
+
 struct ViewLineSegment {
     let column: Int
     let columnWidth: Int
     let characterCount: Int
-    let attributedString: NSAttributedString
+    let runs: [ViewLineRun]
+    /// Length of the segment's text in UTF-16 units. Lets callers test for an
+    /// empty segment without forcing the attributed string to be built.
+    let utf16Length: Int
+    private let lazyAttributedString: LazyAttributedString
+
+    var attributedString: NSAttributedString {
+        return lazyAttributedString.value
+    }
     /// Maps every UTF-16 unit of attributedString to the ordinal of the cell
     /// it belongs to, so glyphs can be positioned by cell (combining marks
     /// share their base's cell instead of shifting the column grid).
@@ -76,6 +119,23 @@ struct ViewLineSegment {
 
     var columnSpan: Int {
         return max(0, characterCount * columnWidth)
+    }
+
+    init(column: Int,
+         columnWidth: Int,
+         characterCount: Int,
+         runs: [ViewLineRun],
+         utf16Length: Int,
+         utf16ToCellOrdinal: [Int],
+         utf16IsCellIdentity: Bool) {
+        self.column = column
+        self.columnWidth = columnWidth
+        self.characterCount = characterCount
+        self.runs = runs
+        self.utf16Length = utf16Length
+        self.utf16ToCellOrdinal = utf16ToCellOrdinal
+        self.utf16IsCellIdentity = utf16IsCellIdentity
+        self.lazyAttributedString = LazyAttributedString(runs: runs)
     }
 
     @inline(__always)
@@ -1004,7 +1064,8 @@ extension TerminalView {
     fileprivate struct ViewLineSegmentBuilder {
         let column: Int
         let columnWidth: Int
-        private var attributedString = NSMutableAttributedString()
+        private var runs: [ViewLineRun] = []
+        private var utf16Length: Int = 0
         private var characterCount: Int = 0
         private var utf16ToCellOrdinal: [Int] = []
         private var cellCount: Int = 0
@@ -1023,7 +1084,8 @@ extension TerminalView {
         /// terminal cell in the batch (its text length in UTF-16 units).
         mutating func append(text: String, attributes: [NSAttributedString.Key: Any],
                              cellUTF16Lengths: [Int]) {
-            attributedString.append(NSAttributedString(string: text, attributes: attributes))
+            runs.append(ViewLineRun(text: text, attributes: attributes, utf16Offset: utf16Length))
+            utf16Length += text.utf16.count
             characterCount += 1
             for length in cellUTF16Lengths {
                 let units = max(1, length)
@@ -1041,7 +1103,7 @@ extension TerminalView {
             guard !isEmpty else {
                 return nil
             }
-            return ViewLineSegment(column: column, columnWidth: columnWidth, characterCount: characterCount, attributedString: attributedString, utf16ToCellOrdinal: utf16ToCellOrdinal, utf16IsCellIdentity: utf16IsCellIdentity)
+            return ViewLineSegment(column: column, columnWidth: columnWidth, characterCount: characterCount, runs: runs, utf16Length: utf16Length, utf16ToCellOrdinal: utf16ToCellOrdinal, utf16IsCellIdentity: utf16IsCellIdentity)
         }
     }
     
@@ -1909,7 +1971,7 @@ extension TerminalView {
             // far more expensive than these keyed lookups.
             let preparedSegments: [(segment: ViewLineSegment, ctLine: CTLine, runs: [PreparedRun])] =
                 lineInfo.segments.compactMap { segment in
-                    guard segment.attributedString.length > 0 else { return nil }
+                    guard segment.utf16Length > 0 else { return nil }
                     let ctLine = cachedCTLine(segment.attributedString)
                     guard let ctRuns = CTLineGetGlyphRuns(ctLine) as? [CTRun] else { return nil }
                     let runs = ctRuns.map { run -> PreparedRun in
