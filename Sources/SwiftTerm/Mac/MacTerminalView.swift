@@ -1000,6 +1000,16 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// When true, braille patterns (U+2800-U+28FF) are drawn as a 2x4 dot grid
+    /// by the renderer instead of being shaped by the font. The drawn grid tiles
+    /// exactly across cells, which no font's braille glyph does.
+    public var customBrailleGlyphs: Bool = true {
+        didSet {
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// When true, custom block/box glyphs use anti-aliasing instead of pixel-aligned edges.
     public var antiAliasCustomBlockGlyphs: Bool = false {
         didSet {
