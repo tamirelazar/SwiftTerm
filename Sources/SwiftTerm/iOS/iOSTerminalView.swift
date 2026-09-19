@@ -264,8 +264,8 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
 
     // Attribute dictionary, maps a console attribute (color, flags) to the corresponding dictionary
     // of attributes for an NSAttributedString
-    var attributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
-    var urlAttributes: [Attribute: [NSAttributedString.Key:Any]] = [:]
+    var attributes: [Attribute: RunAttributes] = [:]
+    var urlAttributes: [Attribute: RunAttributes] = [:]
 
     // Timer to display the terminal buffer
     var link: CADisplayLink!

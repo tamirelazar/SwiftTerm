@@ -1205,7 +1205,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 if runGlyphsCount == 0 {
                     continue
                 }
-                let runAttributes = run.attributes
+                let runStyle = run.style
                 var minOrdinal = Int.max
                 var maxOrdinal = Int.min
                 for index in run.shaperRun.stringIndices {
@@ -1215,12 +1215,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 }
                 let startColumn = shaped.segment.column + (minOrdinal * shaped.segment.columnWidth)
                 let endColumn = shaped.segment.column + ((maxOrdinal + 1) * shaped.segment.columnWidth)
-                var backgroundColor: TTColor?
-                if runAttributes.keys.contains(.selectionBackgroundColor) {
-                    backgroundColor = runAttributes[.selectionBackgroundColor] as? TTColor
-                } else if runAttributes.keys.contains(.backgroundColor) {
-                    backgroundColor = runAttributes[.backgroundColor] as? TTColor
-                }
+                let backgroundColor: TTColor? = runStyle.selectionBackgroundColor ?? runStyle.backgroundColor
                     // Runs carrying the default background emit no quad: the
                     // pass's clear color already paints it (including the
                     // margins), and a quad on top would double-composite when
@@ -1344,11 +1339,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 if runGlyphsCount == 0 {
                     continue
                 }
-                let runAttributes = run.attributes
-                let runFont = runAttributes[.font] as? TTFont ?? terminalView.fontSet.normal
-                let ctFont = runFont as CTFont
+                let runStyle = run.style
+                let ctFont = runStyle.font as CTFont
 
-                let textColor = runAttributes[.foregroundColor] as? TTColor ?? terminalView.effectiveNativeForegroundColor
+                let textColor = runStyle.foregroundColor
                 let textColorSIMD = colorToSIMD(textColor)
 
                 // Same-cell glyphs (base + combining marks) are adjacent in
@@ -1426,10 +1420,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     }
                 }
 
-                if let rawStyle = runAttributes[.underlineStyle] as? Int,
-                   rawStyle != 0 {
-                    let underlineStyle = resolveUnderlineStyle(runAttributes)
-                    let underlineColor = (runAttributes[.underlineColor] as? TTColor) ?? terminalView.effectiveNativeForegroundColor
+                if let rawStyle = runStyle.underlineStyle, rawStyle != 0 {
+                    let underlineStyle = resolveUnderlineStyle(runStyle)
+                    let underlineColor = runStyle.underlineColor ?? terminalView.effectiveNativeForegroundColor
                     let underlineColorSIMD = colorToSIMD(underlineColor)
                     let thickness = underlineThickness * scale
                     let segmentStyle: UnderlineStyle = underlineStyle == .double ? .single : underlineStyle
@@ -1471,10 +1464,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                     }
                 }
 
-                if let rawStyle = runAttributes[.strikethroughStyle] as? Int,
-                   rawStyle != 0 {
+                if let rawStyle = runStyle.strikethroughStyle, rawStyle != 0 {
                     let style = NSUnderlineStyle(rawValue: rawStyle)
-                    let strikeColor = (runAttributes[.strikethroughColor] as? TTColor) ?? terminalView.effectiveNativeForegroundColor
+                    let strikeColor = runStyle.strikethroughColor ?? terminalView.effectiveNativeForegroundColor
                     let strikeColorSIMD = colorToSIMD(strikeColor)
                     let strikeStyle: UnderlineStyle
                     if style.contains(.patternDot) {
@@ -1616,11 +1608,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 guard !run.text.isEmpty else {
                     continue
                 }
-                let runFont = run.attributes[.font] as? TTFont ?? terminalView.fontSet.normal
-                guard let shaped = shaperCache.shape(text: run.text, font: runFont as CTFont) else {
+                guard let shaped = shaperCache.shape(text: run.text, font: run.style.font as CTFont) else {
                     continue
                 }
-                shapedRuns.append(ShapedRun(attributes: run.attributes,
+                shapedRuns.append(ShapedRun(style: run.style,
                                             utf16Offset: run.utf16Offset,
                                             shaperRun: shaped))
             }
@@ -2017,7 +2008,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     private struct ShapedRun {
-        let attributes: [NSAttributedString.Key: Any]
+        let style: RunStyle
         let utf16Offset: Int
         let shaperRun: ShaperRun
     }
@@ -2867,6 +2858,26 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         case .double, .single:
             emitSegment(start: x0, end: x1, centerY: baseY)
         }
+    }
+
+    /// The typed twin of the dictionary overload below: the terminal variant
+    /// wins when present, since it expresses curly and dotted underlines that
+    /// NSUnderlineStyle cannot.
+    private func resolveUnderlineStyle(_ style: RunStyle) -> UnderlineStyle {
+        if let terminalStyle = style.terminalUnderlineStyle {
+            return terminalStyle
+        }
+        let underlineStyle = NSUnderlineStyle(rawValue: style.underlineStyle ?? 0)
+        if underlineStyle.contains(.double) {
+            return .double
+        }
+        if underlineStyle.contains(.patternDot) {
+            return .dotted
+        }
+        if underlineStyle.contains(.patternDash) || underlineStyle.contains(.patternDashDot) || underlineStyle.contains(.patternDashDotDot) {
+            return .dashed
+        }
+        return underlineStyle.isEmpty ? .none : .single
     }
 
     private func resolveUnderlineStyle(_ attributes: [NSAttributedString.Key: Any]) -> UnderlineStyle {
