@@ -9,6 +9,9 @@
 #if !os(iOS) && !os(Windows)
 import Foundation
 import Dispatch
+#if canImport(os)
+import os
+#endif
 #if false //canImport(Subprocess)
 import Subprocess
 import System
@@ -131,6 +134,47 @@ public class LocalProcess {
 
     // Returns false when the backlog passed the high-water mark; the caller
     // must then skip re-arming the PTY read (drainReceivedData resumes it).
+    // Temporary instrumentation for the tslime screensaver work: reports what
+    // the child actually produced, so a rendering shortfall can be told apart
+    // from the child being throttled on its PTY writes.
+#if canImport(os)
+    private static let ptyLog = OSLog(subsystem: "net.aerialscreensaver.AppexSaverMinimal",
+                                      category: "SwiftTermPty")
+#endif
+    private var ptyBytes = 0
+    private var ptyHomeSequences = 0
+    private var ptyEscState = 0
+    private var ptyReportedAt: Double = 0
+    private var ptySuspensions = 0
+
+    private func recordPtyRead(_ bytes: [UInt8], pending: Int, suspended: Bool) {
+        ptyBytes += bytes.count
+        if suspended { ptySuspensions += 1 }
+        // Counts ESC [ H, which tslime emits once per frame, across chunk
+        // boundaries.
+        for byte in bytes {
+            switch (ptyEscState, byte) {
+            case (0, 0x1b): ptyEscState = 1
+            case (1, 0x5b): ptyEscState = 2
+            case (2, 0x48): ptyHomeSequences += 1; ptyEscState = 0
+            case (1, _): ptyEscState = (byte == 0x1b) ? 1 : 0
+            default: ptyEscState = (byte == 0x1b) ? 1 : 0
+            }
+        }
+        let now = Date().timeIntervalSinceReferenceDate
+        if ptyReportedAt == 0 { ptyReportedAt = now; return }
+        guard now - ptyReportedAt >= 1.0 else { return }
+#if canImport(os)
+        os_log(.default, log: LocalProcess.ptyLog,
+               "diag pty bytes=%{public}d frames=%{public}d pending=%{public}d suspends=%{public}d",
+               ptyBytes, ptyHomeSequences, pending, ptySuspensions)
+#endif
+        ptyBytes = 0
+        ptyHomeSequences = 0
+        ptySuspensions = 0
+        ptyReportedAt = now
+    }
+
     private func enqueueReceivedData(_ bytes: [UInt8]) -> Bool {
         pendingLock.lock()
         pendingChunks.append(bytes)
@@ -143,7 +187,9 @@ public class LocalProcess {
         if shouldSchedule {
             pendingScheduled = true
         }
+        let pendingSnapshot = pendingBytes
         pendingLock.unlock()
+        recordPtyRead(bytes, pending: pendingSnapshot, suspended: !keepReading)
         if shouldSchedule {
             dispatchQueue.async { [weak self] in
                 self?.drainReceivedData()
