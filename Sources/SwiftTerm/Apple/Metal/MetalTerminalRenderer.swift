@@ -186,6 +186,36 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
 #if canImport(os)
     private static let profileLog = OSLog(subsystem: "org.tirania.SwiftTerm", category: "MetalProfile")
     private static let profileEnabled = ProcessInfo.processInfo.environment["SWIFTTERM_PROFILE"] == "1"
+
+    // Temporary instrumentation for the tslime screensaver work: the presented
+    // frame rate is a step function of the 60 Hz tick, so it cannot resolve a
+    // change of a few milliseconds in the row build. These report the build
+    // cost directly, once a second, under the host app's logging subsystem.
+    private static let buildTimingLog = OSLog(subsystem: "net.aerialscreensaver.AppexSaverMinimal",
+                                              category: "SwiftTermBuildTiming")
+    private var buildDurations: [Double] = []
+    private var buildReportedAt: CFAbsoluteTime = 0
+
+    private func recordBuildDuration(_ seconds: Double) {
+        buildDurations.append(seconds * 1000)
+        let now = CFAbsoluteTimeGetCurrent()
+        if buildReportedAt == 0 {
+            buildReportedAt = now
+            return
+        }
+        guard now - buildReportedAt >= 1.0, !buildDurations.isEmpty else {
+            return
+        }
+        let sorted = buildDurations.sorted()
+        let mean = sorted.reduce(0, +) / Double(sorted.count)
+        let median = sorted[sorted.count / 2]
+        let p95 = sorted[min(sorted.count - 1, Int(Double(sorted.count) * 0.95))]
+        os_log(.default, log: MetalTerminalRenderer.buildTimingLog,
+               "diag build n=%{public}d mean=%{public}.2f median=%{public}.2f p95=%{public}.2f max=%{public}.2f",
+               sorted.count, mean, median, p95, sorted[sorted.count - 1])
+        buildDurations.removeAll(keepingCapacity: true)
+        buildReportedAt = now
+    }
 #endif
     private weak var terminalView: TerminalView?
     private weak var view: MTKView?
@@ -426,7 +456,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             os_signpost(.begin, log: MetalTerminalRenderer.profileLog, name: "Metal.BuildDrawData", signpostID: buildID)
         }
 #endif
+        let buildStartedAt = CFAbsoluteTimeGetCurrent()
         let drawData = buildDrawData(scale: scale)
+        recordBuildDuration(CFAbsoluteTimeGetCurrent() - buildStartedAt)
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.BuildDrawData", signpostID: buildID)
