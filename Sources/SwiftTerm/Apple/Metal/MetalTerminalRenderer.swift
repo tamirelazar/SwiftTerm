@@ -261,6 +261,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private var rowCache: [Int: RowCacheEntry] = [:]
     private var cacheBufferingMode: MetalBufferingMode?
     private var cacheSignature: CacheSignature?
+    /// Memoizes the conversion of a terminal colour to its float components.
+    /// On macOS that conversion goes through ColorSync, which is far too
+    /// expensive to repeat per cell per frame. Cleared whenever the cache
+    /// signature changes, so a reconfigured view re-resolves catalog colours.
+    private var colorSIMDCache: [TTColor: SIMD4<Float>] = [:]
     private var atlasInvalidatedDuringBuild = false
     private var cursorBlinkTimer: Timer?
     private var cursorBlinkOn = true
@@ -772,6 +777,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let signatureChanged = signature != cacheSignature
         if signatureChanged {
             rowCache.removeAll()
+            colorSIMDCache.removeAll(keepingCapacity: true)
             cacheSignature = signature
         }
 
@@ -2136,6 +2142,20 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     }
 
     private func colorToSIMD(_ color: TTColor) -> SIMD4<Float> {
+        if let cached = colorSIMDCache[color] {
+            return cached
+        }
+        let components = computeColorSIMD(color)
+        // Truecolor output is unbounded, so cap the cache the way the view
+        // caps its attribute cache.
+        if colorSIMDCache.count >= 4096 {
+            colorSIMDCache.removeAll(keepingCapacity: true)
+        }
+        colorSIMDCache[color] = components
+        return components
+    }
+
+    private func computeColorSIMD(_ color: TTColor) -> SIMD4<Float> {
         #if os(macOS)
         let rgb = color.usingColorSpace(.deviceRGB) ?? color
         var r: CGFloat = 0
