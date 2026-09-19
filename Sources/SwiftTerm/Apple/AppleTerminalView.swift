@@ -1228,19 +1228,34 @@ extension TerminalView {
             let width = max(1, Int(ch.width))
             let attr = ch.attribute
             let hasUrl = shouldUnderlineLink(row: row, column: col, width: width, cell: ch)
-            guard let runAttributes = getRunAttributes(attr, withUrl: hasUrl) else {
-                flushPending()
-                if let finished = builder?.buildIfNeeded() {
-                    segments.append(finished)
+            let isSelected = isColumnSelected(selectionColumns, column: col, width: width)
+            let blinkHidden = !textBlinkVisible && attr.style.contains(.blink)
+
+            // A run's rendering is a function of (attr, hasUrl) alone, and both
+            // take part in the batch boundary below, so it cannot change while a
+            // batch is open. Resolving it here rather than per cell turns one
+            // cache lookup per cell into one per run.
+            let isBatchBoundary = attr != lastAttr || hasUrl != lastHasUrl
+                || isSelected != lastIsSelected
+                || blinkHidden != lastBlinkHidden
+                || pendingAttrs == nil
+            var boundaryRunAttributes: RunAttributes? = nil
+            if isBatchBoundary {
+                guard let runAttributes = getRunAttributes(attr, withUrl: hasUrl) else {
+                    flushPending()
+                    if let finished = builder?.buildIfNeeded() {
+                        segments.append(finished)
+                    }
+                    builder = nil
+                    previousPlaceholder = nil
+                    previousPlaceholderAttribute = nil
+                    if bidiLayout == nil {
+                        col += width
+                    }
+                    visualCol += width
+                    continue
                 }
-                builder = nil
-                previousPlaceholder = nil
-                previousPlaceholderAttribute = nil
-                if bidiLayout == nil {
-                    col += width
-                }
-                visualCol += width
-                continue
+                boundaryRunAttributes = runAttributes
             }
 
             if builder == nil || builder!.columnWidth != width {
@@ -1251,15 +1266,10 @@ extension TerminalView {
                 builder = ViewLineSegmentBuilder(column: visualCol, columnWidth: width)
             }
 
-            let isSelected = isColumnSelected(selectionColumns, column: col, width: width)
-            let blinkHidden = !textBlinkVisible && attr.style.contains(.blink)
-
             // Flush batch when attributes change; the batch dictionary is only
             // rebuilt at these boundaries, so unchanged cells append without
             // copying it.
-            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected
-                || blinkHidden != lastBlinkHidden
-                || pendingAttrs == nil {
+            if let runAttributes = boundaryRunAttributes {
                 flushPending()
                 lastAttr = attr
                 lastHasUrl = hasUrl
