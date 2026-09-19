@@ -204,7 +204,10 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private let grayscaleAtlas: GlyphAtlas
     private let colorAtlas: GlyphAtlas
     private let rasterizer = CoreTextGlyphRasterizer()
-    private var glyphCache: [GlyphKey: GlyphEntry] = [:]
+    /// Holds a nil entry for glyphs the rasterizer reports as empty (spaces
+    /// and other blank cells). Without it every blank cell re-runs
+    /// CTFontGetBoundingRectsForGlyphs on every frame.
+    private var glyphCache: [GlyphKey: GlyphEntry?] = [:]
     private var scaledFontCache: [GlyphKey: CTFont] = [:]
     private var customGlyphCache: [CustomGlyphKey: CustomGlyphEntry] = [:]
     private let imageTextureCache = NSMapTable<AnyObject, MTLTexture>(keyOptions: .weakMemory, valueOptions: .strongMemory)
@@ -1630,6 +1633,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             return cached
         }
         guard let bitmap = rasterizer.rasterize(font: font, glyph: glyph) else {
+            glyphCache[key] = GlyphEntry?.none
             return nil
         }
         let atlasKind: GlyphAtlasKind = bitmap.isColor ? .color : .grayscale
@@ -1638,6 +1642,8 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         let maybeRegion = atlas.ensureRegion(width: bitmap.width, height: bitmap.height)
         handleAtlasChange(atlas, previousSize: previousSize)
         guard let region = maybeRegion else {
+            // An atlas that could not make room is a transient state; leave the
+            // cache untouched so the glyph is retried on the next pass.
             return nil
         }
         atlas.write(region: region, pixels: bitmap.pixels, width: bitmap.width, height: bitmap.height)
