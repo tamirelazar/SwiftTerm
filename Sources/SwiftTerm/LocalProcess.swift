@@ -155,8 +155,9 @@ public class LocalProcess {
     // Re-arm the PTY read loop after a backpressure pause.
     private func resumePtyRead() {
         guard running, let io else { return }
+        let generation = self.generation
         io.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, errno in
-            self?.childProcessRead(done: done, data: data, errno: errno)
+            self?.childProcessRead(done: done, data: data, errno: errno, generation: generation)
         }
     }
 
@@ -278,12 +279,18 @@ public class LocalProcess {
 
     /* Total number of bytes read */
     var totalRead = 0
-    func childProcessRead (done: Bool, data: DispatchData?, errno: Int32) {
+
+    /// - Parameter generation: the child this read was armed for. A
+    ///   completion from a child that has since been replaced is dropped:
+    ///   its data belongs to a pty nobody is showing any more, and its
+    ///   end-of-file must not be mistaken for the live child's.
+    func childProcessRead (done: Bool, data: DispatchData?, errno: Int32, generation: UInt64) {
+        guard generation == self.generation else { return }
         guard let data else {
             // Re-schedule the read on transient errors to keep the chain alive
             if !done, running {
                 io?.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, errno in
-                    self?.childProcessRead(done: done, data: data, errno: errno)
+                    self?.childProcessRead(done: done, data: data, errno: errno, generation: generation)
                 }
             }
             return
@@ -337,7 +344,7 @@ public class LocalProcess {
         }
         if done && keepReading {
             io?.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, errno in
-                self?.childProcessRead(done: done, data: data, errno: errno)
+                self?.childProcessRead(done: done, data: data, errno: errno, generation: generation)
             }
         }
     }
@@ -362,8 +369,14 @@ public class LocalProcess {
         io = nil
     }
 
-    func processTerminated ()
+    /// - Parameter generation: the child whose exit source fired. An exit
+    ///   from a child that has since been replaced is dropped -- `shellPid`
+    ///   is the new child's by then, so reaping here would `waitpid` the
+    ///   live process and report *its* termination to the delegate. The dead
+    ///   child is reaped by `terminateChild`, which is what killed it.
+    func processTerminated (generation: UInt64)
     {
+        guard generation == self.generation else { return }
         var n: Int32 = 0
         waitpid (shellPid, &n, WNOHANG)
         delegate?.processTerminated(self, exitCode: n)
@@ -372,6 +385,28 @@ public class LocalProcess {
 
     /// Indicates if the child process is currently running
     public private(set) var running: Bool = false
+
+    /// Which child a callback belongs to.
+    ///
+    /// `terminate()` immediately followed by `startProcess()` is a supported
+    /// sequence -- it is how a caller changes a launch argument without
+    /// rebuilding the view -- but the old child's read completion and exit
+    /// event are delivered asynchronously, on queues that outlive it. Without
+    /// this counter they land on the *new* child's state: the read completion
+    /// sets `childfd` to -1 and clears `running`, and the exit handler calls
+    /// `waitpid` on `shellPid`, which by then is the new child's pid.
+    ///
+    /// The result is not a dead terminal, which is why it is easy to miss.
+    /// Reads keep flowing, because they arrive through the new DispatchIO --
+    /// so the child renders normally while every path gated on `running` or
+    /// `childfd` silently stops working. A window resize is the one that
+    /// shows: the new size never reaches the child, and it keeps drawing for
+    /// the grid it was launched with.
+    ///
+    /// Bumped only by a launch. A `terminate()` that is not followed by one
+    /// leaves the counter alone, so a caller that merely stops the child sees
+    /// exactly the callbacks it always did.
+    private var generation: UInt64 = 0
     
     /**
      * Launches a child process inside a pseudo-terminal
@@ -437,7 +472,7 @@ public class LocalProcess {
             io.setLimit(lowWater: 1)
             io.setLimit(highWater: readSize)
             io.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, errno in
-                self?.childProcessRead(done: done, data: data, errno: errno)
+                self?.childProcessRead(done: done, data: data, errno: errno, generation: self?.generation ?? 0)
             }
 
             // Start subprocess with swift-subprocess asynchronously
@@ -518,6 +553,11 @@ public class LocalProcess {
             // waitpid(0, ...) target the caller's process group, which never
             // matches the setsid child). Setting the process state first
             // keeps that early callback correct.
+            // A new child, and therefore a new generation: every callback
+            // still in flight for the previous one is now stale and will be
+            // dropped rather than writing the state below back out.
+            generation &+= 1
+            let generation = self.generation
             running = true
             self.childfd = childfd
             self.shellPid = shellPid
@@ -532,7 +572,7 @@ public class LocalProcess {
                 // callers waiting on exit hang. Also resume() on the pre-10.12
                 // path, which previously did nothing (the source is created
                 // suspended, so without resume it never starts).
-                cm.setEventHandler(handler: { [weak self] in self?.processTerminated () })
+                cm.setEventHandler(handler: { [weak self] in self?.processTerminated (generation: generation) })
                 if #available(macOS 10.12, *) {
                     cm.activate()
                 } else {
@@ -553,7 +593,7 @@ public class LocalProcess {
             io.setLimit(lowWater: 1)
             io.setLimit(highWater: readSize)
             io.read(offset: 0, length: readSize, queue: readQueue) { [weak self] done, data, errno in
-                self?.childProcessRead(done: done, data: data, errno: errno)
+                self?.childProcessRead(done: done, data: data, errno: errno, generation: generation)
             }
         }
     }
