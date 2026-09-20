@@ -394,13 +394,25 @@ extension TerminalView {
         resetCaches()
         self.cellDimension = computeFontDimensions ()
         if (frame.width > 0) && (frame.height > 0) {
-            // Use getEffectiveWidth so the scroller's reserved width is taken
-            // into account, matching processSizeChange(). Computing columns from
-            // the raw frame width here would over-count by the scroller width,
-            // so zooming the font in and back out would drift the column count.
-            let newCols = Int(getEffectiveWidth(size: frame.size) / cellDimension.width)
-            let newRows = Int(frame.height / cellDimension.height)
-            resize(cols: newCols, rows: newRows)
+            // Re-grid through processSizeChange -- the same path a window resize
+            // takes -- rather than through resize(cols:rows:).
+            //
+            // The two differ in one respect: resize(cols:rows:) soft-resets the
+            // terminal afterwards, and a font change is a presentation change
+            // with no business resetting emulator state. A soft reset clears
+            // DECTCEM, the colour palette, the charset, origin mode, wraparound
+            // and the scroll margins -- so changing the font un-hid the cursor
+            // of any full-screen program that had hidden it. Such a program
+            // redraws its colours and attributes every frame and never notices
+            // those; `civis` it sends once at startup, so the caret came back
+            // and stayed. That is how this was found.
+            //
+            // processSizeChange also computes the new grid the same way the
+            // hand-rolled arithmetic here used to (getEffectiveWidth, so the
+            // scroller's reserved width is not counted as columns), no-ops when
+            // the count has not moved, and tells the delegate -- so the pty
+            // still gets its new winsize from here.
+            _ = processSizeChange(newSize: frame.size)
         }
         updateCaretView()
         
