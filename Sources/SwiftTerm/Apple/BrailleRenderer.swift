@@ -17,7 +17,7 @@ import AppKit
 /// `(0.5 - inset)`, so any inset above zero puts a visible seam at every cell
 /// boundary. A font's braille glyph can only approximate that; here it holds by
 /// construction.
-enum BrailleRenderer {
+public enum BrailleRenderer {
     static let lowerBoundary: UInt32 = 0x2800
     static let upperBoundary: UInt32 = 0x28FF
 
@@ -25,12 +25,12 @@ enum BrailleRenderer {
     /// configured. The geometry is per-view state on ``TerminalView``; these
     /// are only that property's initial value, so an unconfigured fork still
     /// draws the look this renderer was designed around.
-    static let defaultDotSizeFraction: CGFloat = 0.78
+    public static let defaultDotSizeFraction: CGFloat = 0.78
 
     /// Corner radius as a fraction of the dot size, for a view that has not
     /// been configured. The dots are rounded squares rather than circles,
     /// which keeps their weight up at small sizes.
-    static let defaultCornerFraction: CGFloat = 0.3
+    public static let defaultCornerFraction: CGFloat = 0.3
 
     static func shouldRender(codePoint: UInt32) -> Bool {
         codePoint >= lowerBoundary && codePoint <= upperBoundary
