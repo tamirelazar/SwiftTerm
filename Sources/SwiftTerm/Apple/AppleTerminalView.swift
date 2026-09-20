@@ -1333,21 +1333,20 @@ extension TerminalView {
             // U+2800...U+28FF
             if !blinkHidden, customBrailleGlyphs,
                BrailleRenderer.shouldRender(codePoint: renderCodePoint) {
-                if renderCodePoint == BrailleRenderer.lowerBoundary {
-                    // U+2800 is the blank pattern. It has nothing to draw, so it
-                    // stays in the text batch as a space rather than breaking the
-                    // run and costing a transparent quad: dense braille output is
-                    // full of blanks.
-                    pendingText.append(" ")
-                    pendingCellLengths.append(1)
-                } else {
-                    flushPending()
+                // The dots are drawn in their own pass, keyed by column, so the
+                // cell only needs a space holding its place in the text run.
+                // Unlike the block and box branches this does not flush the
+                // batch to append that space through the builder: braille is
+                // dense enough that a flush per cell would cost more than the
+                // shaping it saves, and U+2800, the blank pattern, needs no
+                // draw item at all.
+                pendingText.append(" ")
+                pendingCellLengths.append(1)
+                if renderCodePoint != BrailleRenderer.lowerBoundary {
                     brailleGlyphs.append(BrailleRenderItem(column: visualCol,
                                                            columnWidth: width,
                                                            codePoint: renderCodePoint,
                                                            foregroundColor: currentStyle.foregroundColor))
-                    builder?.append(text: " ", attributes: currentAttributes, style: currentStyle,
-                                    cellUTF16Lengths: [1])
                 }
                 previousPlaceholder = nil
                 previousPlaceholderAttribute = nil
