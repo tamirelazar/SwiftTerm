@@ -626,10 +626,39 @@ public class LocalProcess {
         childfd = -1
 
         if shellPid != 0 {
-            kill(shellPid, SIGTERM)
+            terminateChild(shellPid)
         }
 
         childStopped()
+    }
+
+    /// How long `terminate()` gives the child to act on SIGTERM before it
+    /// escalates to SIGKILL.
+    static let terminationGrace: DispatchTimeInterval = .milliseconds(250)
+
+    /// Signals the child, then makes sure it is actually gone.
+    ///
+    /// `forkpty()` puts the child in a session of its own, so its process-group
+    /// id is its pid and `kill(-pid, ...)` reaches whatever it spawned rather
+    /// than the child alone. Escalating matters here because the caller may be
+    /// a screensaver: there is no user to notice a survivor and no window to
+    /// close it from, so a child that blocks or ignores SIGTERM would sit on a
+    /// pty for as long as the host process lives.
+    private func terminateChild(_ pid: pid_t) {
+        if kill(-pid, SIGTERM) == -1 && errno == ESRCH {
+            // Nothing under that process-group id -- the child never became a
+            // group leader. Fall back to signalling it directly.
+            kill(pid, SIGTERM)
+        }
+        dispatchQueue.asyncAfter(deadline: .now() + LocalProcess.terminationGrace) {
+            // kill(pid, 0) succeeds for a zombie too, so reap first: a child
+            // that has already exited is not a survivor.
+            var status: Int32 = 0
+            if waitpid(pid, &status, WNOHANG) != 0 { return }
+            guard kill(pid, 0) == 0 else { return }
+            kill(-pid, SIGKILL)
+            kill(pid, SIGKILL)
+        }
     }
     
     var loggingDir: String? = nil
