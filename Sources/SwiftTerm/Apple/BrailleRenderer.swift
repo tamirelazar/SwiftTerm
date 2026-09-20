@@ -21,12 +21,16 @@ enum BrailleRenderer {
     static let lowerBoundary: UInt32 = 0x2800
     static let upperBoundary: UInt32 = 0x28FF
 
-    /// Dot size as a fraction of the dot pitch.
-    static let dotSizeFraction: CGFloat = 0.78
+    /// Dot size as a fraction of the dot pitch, for a view that has not been
+    /// configured. The geometry is per-view state on ``TerminalView``; these
+    /// are only that property's initial value, so an unconfigured fork still
+    /// draws the look this renderer was designed around.
+    static let defaultDotSizeFraction: CGFloat = 0.78
 
-    /// Corner radius as a fraction of the dot size. The dots are rounded
-    /// squares rather than circles, which keeps their weight up at small sizes.
-    static let cornerFraction: CGFloat = 0.3
+    /// Corner radius as a fraction of the dot size, for a view that has not
+    /// been configured. The dots are rounded squares rather than circles,
+    /// which keeps their weight up at small sizes.
+    static let defaultCornerFraction: CGFloat = 0.3
 
     static func shouldRender(codePoint: UInt32) -> Bool {
         codePoint >= lowerBoundary && codePoint <= upperBoundary
@@ -40,10 +44,18 @@ enum BrailleRenderer {
 
     /// Fills the cell's set dots with the context's current fill color. The
     /// context is expected to be y-up, matching the other custom glyph drawers.
+    ///
+    /// Both fractions are required rather than defaulted: every caller draws
+    /// on behalf of a particular view, and a silent fallback here is how two
+    /// copies of the same number start disagreeing. Neither is range-checked
+    /// — what a sensible dot size is, is the embedder's policy, and a second
+    /// opinion here would only diverge from it.
     static func draw(codePoint: UInt32,
                      in context: CGContext,
                      cellOrigin: CGPoint,
-                     cellSize: CGSize) {
+                     cellSize: CGSize,
+                     dotSizeFraction: CGFloat,
+                     cornerFraction: CGFloat) {
         guard shouldRender(codePoint: codePoint) else {
             return
         }

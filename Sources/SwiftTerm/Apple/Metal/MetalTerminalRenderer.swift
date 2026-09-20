@@ -182,6 +182,20 @@ struct KittyCacheStamp: Hashable {
     let nextPlacementId: UInt32
 }
 
+/// The procedural braille geometry a batch of custom glyph bitmaps was
+/// rasterized with. It is deliberately *not* part of ``CustomGlyphKey``:
+/// braille is the densest glyph class in the frames this renderer is tuned
+/// for, so the per-cell key lookup is hot, while the geometry itself only
+/// moves when the embedder changes a setting. Tracking it separately keeps
+/// the hot key narrow and pays the cost as one cache flush per change.
+struct BrailleGeometry: Hashable {
+    let dotSizeFraction: CGFloat
+    let cornerFraction: CGFloat
+
+    static let unconfigured = BrailleGeometry(dotSizeFraction: BrailleRenderer.defaultDotSizeFraction,
+                                              cornerFraction: BrailleRenderer.defaultCornerFraction)
+}
+
 struct CacheSignature: Hashable {
     let scale: Double
     let cellWidth: Double
@@ -226,6 +240,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
     private var glyphCache: [GlyphKey: GlyphEntry?] = [:]
     private var scaledFontCache: [GlyphKey: CTFont] = [:]
     private var customGlyphCache: [CustomGlyphKey: CustomGlyphEntry] = [:]
+    /// The geometry every braille bitmap currently in `customGlyphCache` was
+    /// drawn with. Refreshed from the view once per frame build; a change
+    /// drops the cache, and the atlas regions those entries held are
+    /// reclaimed the next time the atlas resets.
+    private var brailleGeometry = BrailleGeometry.unconfigured
     private let imageTextureCache = NSMapTable<AnyObject, MTLTexture>(keyOptions: .weakMemory, valueOptions: .strongMemory)
     private var kittyTextureCache: [UInt32: (signature: KittyImageSignature, texture: MTLTexture)] = [:]
     private var rowCache: [Int: RowCacheEntry] = [:]
@@ -742,6 +761,13 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                        isAltBuffer: terminalView.terminal.isCurrentBufferAlternate,
                                        kittyStamp: kittyStamp,
                                        bidiHostPolicy: terminalView.bidiHostPolicy)
+        let currentBrailleGeometry = BrailleGeometry(dotSizeFraction: terminalView.brailleDotSizeFraction,
+                                                     cornerFraction: terminalView.brailleCornerFraction)
+        if currentBrailleGeometry != brailleGeometry {
+            brailleGeometry = currentBrailleGeometry
+            customGlyphCache.removeAll(keepingCapacity: true)
+        }
+
         let signatureChanged = signature != cacheSignature
         if signatureChanged {
             rowCache.removeAll()
@@ -1848,7 +1874,9 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                 BrailleRenderer.draw(codePoint: codePoint,
                                      in: context,
                                      cellOrigin: cellOrigin,
-                                     cellSize: cellSize)
+                                     cellSize: cellSize,
+                                     dotSizeFraction: brailleGeometry.dotSizeFraction,
+                                     cornerFraction: brailleGeometry.cornerFraction)
                 return true
             case UInt32(BlockElementMapping.lowerBoundary)...UInt32(BlockElementMapping.upperBoundary):
                 guard let rects = BlockElementMapping.rects(for: codePoint) else {
