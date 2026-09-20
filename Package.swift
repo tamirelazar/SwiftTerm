@@ -22,6 +22,14 @@ let benchmarkDependencies: [Package.Dependency] = (isGitHubActions || disableBen
     .package(url: "https://github.com/ordo-one/package-benchmark", .upToNextMajor(from: "1.29.11"))
 ]
 
+// Xcode compiles a package target with the package's own settings, so a Debug
+// build of a host app gets -Onone SwiftTerm however the project is configured —
+// roughly half the frame rate in a terminal that redraws at 60 Hz. Ask for -O
+// here so a plain build is as fast as a scripted one. Release is already -O.
+let swiftTermSettings: [SwiftSetting] = [
+    .unsafeFlags(["-O"], .when(configuration: .debug))
+]
+
 let buildInfoTargets: [Target] = [
     .executableTarget(
         name: "SwiftTermBuildInfoGenerator",
@@ -35,6 +43,17 @@ let buildInfoTargets: [Target] = [
 ]
 
 #if os(Windows)
+let swiftTermTarget: Target = .target(
+    name: "SwiftTerm",
+    dependencies: [],
+    path: "Sources/SwiftTerm",
+    exclude: platformExcludes + ["Mac/README.md"],
+    swiftSettings: swiftTermSettings,
+    plugins: [
+        .plugin(name: "SwiftTermBuildInfoPlugin")
+    ]
+)
+
 let products: [Product] = [
     .executable(name: "SwiftTermFuzz", targets: ["SwiftTermFuzz"]),
     .library(
@@ -44,18 +63,7 @@ let products: [Product] = [
 ]
 
 let targets: [Target] = [
-    .target(
-        name: "SwiftTerm",
-        dependencies: [],
-        path: "Sources/SwiftTerm",
-        exclude: platformExcludes + ["Mac/README.md"],
-        plugins: [
-            .plugin(name: "SwiftTermBuildInfoPlugin")
-        ]
-//        swiftSettings: [
-//            .unsafeFlags(["-enforce-exclusivity=none"])
-//        ]
-    ),
+    swiftTermTarget,
     .executableTarget (
         name: "SwiftTermFuzz",
         dependencies: ["SwiftTerm"],
@@ -81,6 +89,22 @@ let products: [Product] = [
     ),
 ]
 
+let swiftTermTarget: Target = .target(
+    name: "SwiftTerm",
+    //
+    // We can not use Swift Subprocess, because there is no way of configuring the child process to
+    // be a controlling terminal, as it is posix-spawn based.
+    path: "Sources/SwiftTerm",
+    exclude: platformExcludes + ["Mac/README.md"],
+    resources: [
+        .process("Apple/Metal/Shaders.metal")
+    ],
+    swiftSettings: swiftTermSettings,
+    plugins: [
+        .plugin(name: "SwiftTermBuildInfoPlugin")
+    ]
+)
+
 let benchmarkTargets: [Target] = (isGitHubActions || disableBenchmark) ? [] : [
     .executableTarget(
         name: "SwiftTermBenchmarks",
@@ -96,26 +120,7 @@ let benchmarkTargets: [Target] = (isGitHubActions || disableBenchmark) ? [] : [
 ]
 
 let targets: [Target] = [
-    .target(
-        name: "SwiftTerm",
-        //
-        // We can not use Swift Subprocess, because there is no way of configuring the child process to
-        // be a controlling terminal, as it is posix-spawn based.
-//        dependencies: [
-//            .product(name: "Subprocess", package: "swift-subprocess", condition: .when(platforms: [.macOS, .linux]))
-//        ],
-        path: "Sources/SwiftTerm",
-        exclude: platformExcludes + ["Mac/README.md"],
-        resources: [
-            .process("Apple/Metal/Shaders.metal")
-        ],
-        plugins: [
-            .plugin(name: "SwiftTermBuildInfoPlugin")
-        ]
-//        swiftSettings: [
-//            .unsafeFlags(["-enforce-exclusivity=none"])
-//        ]
-    ),
+    swiftTermTarget,
     .executableTarget (
         name: "SwiftTermFuzz",
         dependencies: ["SwiftTerm"],
