@@ -1889,7 +1889,9 @@ extension TerminalView {
             BrailleRenderer.draw(codePoint: item.codePoint,
                                  in: context,
                                  cellOrigin: cellOrigin,
-                                 cellSize: cellSize)
+                                 cellSize: cellSize,
+                                 dotSizeFraction: brailleDotSizeFraction,
+                                 cornerFraction: brailleCornerFraction)
         }
         context.restoreGState()
     }

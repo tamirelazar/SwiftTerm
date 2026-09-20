@@ -1605,6 +1605,26 @@ open class TerminalView: UIScrollView, UITextInputTraits, UIKeyInput, UIScrollVi
         }
     }
 
+    /// Dot size as a fraction of the braille dot pitch, for the procedural
+    /// braille grid. Only consulted while ``customBrailleGlyphs`` is on.
+    public var brailleDotSizeFraction: CGFloat = BrailleRenderer.defaultDotSizeFraction {
+        didSet {
+            guard brailleDotSizeFraction != oldValue else { return }
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
+    /// Corner radius of a procedurally drawn braille dot, as a fraction of
+    /// the dot size: 0 is a square dot, 1 a circle.
+    public var brailleCornerFraction: CGFloat = BrailleRenderer.defaultCornerFraction {
+        didSet {
+            guard brailleCornerFraction != oldValue else { return }
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// When true, custom block/box glyphs use anti-aliasing instead of pixel-aligned edges.
     public var antiAliasCustomBlockGlyphs: Bool = false {
         didSet {
