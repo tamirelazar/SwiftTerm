@@ -2731,10 +2731,26 @@ extension TerminalView {
         }
         // throttle
         if !pendingDisplay {
+            pendingDisplay = true
+#if canImport(MetalKit)
+            // The MTKView is already the coalescer this delay is imitating:
+            // isPaused + enableSetNeedsDisplay means the draw lands on the next
+            // vsync no matter when the redraw is posted. Waiting a frame period
+            // first only puts a second quantizer in front of that one, and two
+            // in series floor the rate at two frame periods -- 30 fps on a 60 Hz
+            // display, whatever the source emits. Post immediately and let vsync
+            // do the pacing; pendingDisplay still collapses a burst of feed
+            // chunks into one main-thread redraw.
+            if metalView != nil {
+                DispatchQueue.main.async { [weak self] in
+                    self?.updateDisplay()
+                }
+                return
+            }
+#endif
             let fps60 = 16670000
             // let fps30 = 16670000*2
             let fpsDelay = fps60
-            pendingDisplay = true
             DispatchQueue.main.asyncAfter(
                 deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay)),
                 execute: updateDisplay)
