@@ -77,6 +77,18 @@ struct BoxDrawingRenderer {
     static let lowerBoundary: Int32 = 0x2500
     static let upperBoundary: Int32 = 0x257F
 
+    /// Pixel bounds of the light strokes, measured from the cell's top-left.
+    /// Background masks and glyph drawing must use the same rounding here.
+    static func lightStrokeBounds(cellWidthPx: Int, cellHeightPx: Int,
+                                  thicknessPx: Int) -> CGRect {
+        let thickness = max(1, thicknessPx)
+        let x = max(0, cellWidthPx - thickness) / 2
+        let y = max(0, cellHeightPx - thickness) / 2
+        return CGRect(x: x, y: y,
+                      width: min(thickness, cellWidthPx - x),
+                      height: min(thickness, cellHeightPx - y))
+    }
+
     static func draw(codePoint: UInt32,
                      in context: CGContext,
                      cellOrigin: CGPoint,
@@ -248,8 +260,11 @@ private func linesChar(lines: Lines, canvas: BoxDrawingCanvas, baseThicknessPx: 
     let lightPx = max(1, max(baseThicknessPx, canvas.minStrokeThicknessPx))
     let heavyPx = max(1, lightPx * 2)
 
-    let hLightTop = subClamped(canvas.cellHeightPx, lightPx) / 2
-    let hLightBottom = addClamped(hLightTop, lightPx, canvas.cellHeightPx)
+    let lightBounds = BoxDrawingRenderer.lightStrokeBounds(cellWidthPx: canvas.cellWidthPx,
+                                                          cellHeightPx: canvas.cellHeightPx,
+                                                          thicknessPx: lightPx)
+    let hLightTop = Int(lightBounds.minY)
+    let hLightBottom = Int(lightBounds.maxY)
 
     let hHeavyTop = subClamped(canvas.cellHeightPx, heavyPx) / 2
     let hHeavyBottom = addClamped(hHeavyTop, heavyPx, canvas.cellHeightPx)
@@ -257,8 +272,8 @@ private func linesChar(lines: Lines, canvas: BoxDrawingCanvas, baseThicknessPx: 
     let hDoubleTop = subClamped(hLightTop, lightPx)
     let hDoubleBottom = addClamped(hLightBottom, lightPx, canvas.cellHeightPx)
 
-    let vLightLeft = subClamped(canvas.cellWidthPx, lightPx) / 2
-    let vLightRight = addClamped(vLightLeft, lightPx, canvas.cellWidthPx)
+    let vLightLeft = Int(lightBounds.minX)
+    let vLightRight = Int(lightBounds.maxX)
 
     let vHeavyLeft = subClamped(canvas.cellWidthPx, heavyPx) / 2
     let vHeavyRight = addClamped(vHeavyLeft, heavyPx, canvas.cellWidthPx)

@@ -1000,6 +1000,19 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
 
+    /// Exterior color of a thin rectangular box frame. The renderer fills the
+    /// outward portions of its border cells with this color before drawing the
+    /// rules, so the interior background stops at the visible border. Hosts
+    /// supply this together with their frame appearance; nil leaves ordinary
+    /// terminal cell backgrounds unchanged.
+    public var simpleFrameOuterBackground: NSColor? {
+        didSet {
+            guard simpleFrameOuterBackground != oldValue else { return }
+            terminal.updateFullScreen()
+            queuePendingDisplay()
+        }
+    }
+
     /// When true, braille patterns (U+2800-U+28FF) are drawn as a 2x4 dot grid
     /// by the renderer instead of being shaped by the font. The drawn grid tiles
     /// exactly across cells, which no font's braille glyph does.

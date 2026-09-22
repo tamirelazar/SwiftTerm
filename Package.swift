@@ -75,6 +75,7 @@ let targets: [Target] = [
         path: "Tests/SwiftTermTests",
         resources: [
             .copy("Fixtures/xterm-ghostty.infocmp"),
+            .copy("Fixtures/simple-frame.ansi"),
             .copy("Fixtures/swifterm-terminfo.infocmp")
         ]
     )
@@ -140,6 +141,7 @@ let targets: [Target] = [
         path: "Tests/SwiftTermTests",
         resources: [
             .copy("Fixtures/xterm-ghostty.infocmp"),
+            .copy("Fixtures/simple-frame.ansi"),
             .copy("Fixtures/swifterm-terminfo.infocmp")
         ]
     )

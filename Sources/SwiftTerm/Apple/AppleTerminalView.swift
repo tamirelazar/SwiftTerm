@@ -2004,6 +2004,16 @@ extension TerminalView {
         let lastRow = displayBuffer.yDisp+Int((boundsMaxY-dirtyRect.minY)/cellHeight)
         #endif
 
+        let maskScale = backingScaleFactor()
+        let maskFirstRow = max(0, displayBuffer.yDisp)
+        let maskLastRow = min(displayBuffer.lines.count - 1, maskFirstRow + displayBuffer.rows - 1)
+        let frameBackgroundMasks = simpleFrameBackgroundRects(scale: maskScale,
+                                                               firstRow: maskFirstRow,
+                                                               lastRow: maskLastRow,
+                                                               yDisp: bufferOffset)
+            .map { CGRect(x: $0.minX / maskScale, y: $0.minY / maskScale,
+                          width: $0.width / maskScale, height: $0.height / maskScale) }
+
         let isAltBuffer = terminal.isCurrentBufferAlternate
         var virtualPlacementsByImageId: [UInt32: [KittyPlacementRecord]] = [:]
         if !terminal.kittyGraphicsState.placementsByKey.isEmpty {
@@ -2212,6 +2222,19 @@ extension TerminalView {
             }
 
             context.restoreGState()
+
+            // Paint outside the visible rules after the full-cell backgrounds,
+            // before any glyphs. Clip per row because CoreGraphics draws rows in
+            // sequence; a later row's background must not cover an earlier mask.
+            if let color = simpleFrameOuterBackground, !frameBackgroundMasks.isEmpty {
+                context.saveGState()
+                context.setShouldAntialias(false)
+                context.clip(to: CGRect(x: 0, y: lineOrigin.y, width: bounds.width,
+                                        height: cellDimension.height))
+                context.setFillColor(color.cgColor)
+                context.fill(frameBackgroundMasks)
+                context.restoreGState()
+            }
 
             if !underTextImages.isEmpty {
                 let offsetScale = getImageScale()

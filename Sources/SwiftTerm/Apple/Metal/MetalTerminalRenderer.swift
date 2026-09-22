@@ -138,6 +138,7 @@ struct DrawData {
     var cursorColorVertices: [ColorVertex]
     var cursorGlyphVerticesGray: [GlyphVertex]
     var cursorGlyphVerticesColor: [GlyphVertex]
+    var frameBackgroundMasks: [ColorCell] = []
 }
 
 struct KittyImageSignature: Hashable {
@@ -528,105 +529,7 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         }
         bufferPool.beginFrame()
         let viewport = SIMD2<Float>(Float(view.drawableSize.width), Float(view.drawableSize.height))
-
-        if let frame = drawData.frame {
-            drawFrameData(frame, encoder: encoder, viewport: viewport)
-        } else {
-            let rows = drawData.rows
-            drawVertexBuffers(rows: rows,
-                              bufferKey: \.backgroundBuffer,
-                              countKey: \.backgroundCount,
-                              pipeline: cellColorPipeline,
-                              texture: nil,
-                              encoder: encoder,
-                              viewport: viewport)
-
-            drawImageRows(rows: rows,
-                          imageKey: \.underImageBuffers,
-                          encoder: encoder,
-                          viewport: viewport)
-
-            drawVertexBuffers(rows: rows,
-                              bufferKey: \.powerlineJoinBuffer,
-                              countKey: \.powerlineJoinCount,
-                              pipeline: cellColorPipeline,
-                              texture: nil,
-                              encoder: encoder,
-                              viewport: viewport)
-
-            drawVertexBuffers(rows: rows,
-                              bufferKey: \.glyphGrayBuffer,
-                              countKey: \.glyphGrayCount,
-                              pipeline: cellTextGrayPipeline,
-                              texture: grayscaleAtlas.texture,
-                              encoder: encoder,
-                              viewport: viewport)
-
-            drawVertexBuffers(rows: rows,
-                              bufferKey: \.glyphColorBuffer,
-                              countKey: \.glyphColorCount,
-                              pipeline: cellTextPipeline,
-                              texture: colorAtlas.texture,
-                              encoder: encoder,
-                              viewport: viewport)
-
-            drawVertexBuffers(rows: rows,
-                              bufferKey: \.decorationBuffer,
-                              countKey: \.decorationCount,
-                              pipeline: cellColorPipeline,
-                              texture: nil,
-                              encoder: encoder,
-                              viewport: viewport)
-
-            drawImageRows(rows: rows,
-                          imageKey: \.placeholderImageBuffers,
-                          encoder: encoder,
-                          viewport: viewport)
-            drawImageRows(rows: rows,
-                          imageKey: \.overImageBuffers,
-                          encoder: encoder,
-                          viewport: viewport)
-            drawImageRows(rows: rows,
-                          imageKey: \.otherImageBuffers,
-                          encoder: encoder,
-                          viewport: viewport)
-        }
-
-        if !drawData.cursorColorVertices.isEmpty {
-            if let buffer = makeBuffer(drawData.cursorColorVertices) {
-                encoder.setRenderPipelineState(colorPipeline)
-                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-                var viewportVar = viewport
-                encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorColorVertices.count)
-            }
-        }
-
-        if !drawData.cursorGlyphVerticesGray.isEmpty {
-            if let buffer = makeBuffer(drawData.cursorGlyphVerticesGray) {
-                encoder.setRenderPipelineState(textGrayPipeline)
-                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-                var viewportVar = viewport
-                encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-                encoder.setFragmentTexture(grayscaleAtlas.texture, index: 0)
-                encoder.setFragmentSamplerState(sampler, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorGlyphVerticesGray.count)
-            }
-        }
-
-        if !drawData.cursorGlyphVerticesColor.isEmpty {
-            if let buffer = makeBuffer(drawData.cursorGlyphVerticesColor) {
-                encoder.setRenderPipelineState(textPipeline)
-                encoder.setVertexBuffer(buffer, offset: 0, index: 0)
-                var viewportVar = viewport
-                encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
-                encoder.setFragmentTexture(colorAtlas.texture, index: 0)
-                encoder.setFragmentSamplerState(sampler, index: 0)
-                encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorGlyphVerticesColor.count)
-            }
-        }
-
-        encoder.endEncoding()
+        encodeDrawData(drawData, encoder: encoder, viewport: viewport)
 #if canImport(os)
         if MetalTerminalRenderer.profileEnabled {
             os_signpost(.end, log: MetalTerminalRenderer.profileLog, name: "Metal.Encode", signpostID: encodeID)
@@ -663,6 +566,102 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             self.terminalView?.metalRenderer(self, didPresentAt: Date())
         }
     }
+
+    /// Encodes the terminal layers in their presentation order.  Keeping this
+    /// independent of a CAMetalDrawable lets the test target read back the
+    /// exact pixels produced by the production geometry and shaders.
+    private func encodeDrawData(_ drawData: DrawData,
+                                encoder: MTLRenderCommandEncoder,
+                                viewport: SIMD2<Float>) {
+        if let frame = drawData.frame {
+            drawFrameData(frame, encoder: encoder, viewport: viewport)
+        } else {
+            let rows = drawData.rows
+            drawVertexBuffers(rows: rows, bufferKey: \.backgroundBuffer, countKey: \.backgroundCount,
+                              pipeline: cellColorPipeline, texture: nil, encoder: encoder, viewport: viewport)
+            drawCellBuffer(drawData.frameBackgroundMasks, pipeline: cellColorPipeline,
+                           texture: nil, encoder: encoder, viewport: viewport)
+            drawImageRows(rows: rows, imageKey: \.underImageBuffers, encoder: encoder, viewport: viewport)
+            drawVertexBuffers(rows: rows, bufferKey: \.powerlineJoinBuffer, countKey: \.powerlineJoinCount,
+                              pipeline: cellColorPipeline, texture: nil, encoder: encoder, viewport: viewport)
+            drawVertexBuffers(rows: rows, bufferKey: \.glyphGrayBuffer, countKey: \.glyphGrayCount,
+                              pipeline: cellTextGrayPipeline, texture: grayscaleAtlas.texture, encoder: encoder, viewport: viewport)
+            drawVertexBuffers(rows: rows, bufferKey: \.glyphColorBuffer, countKey: \.glyphColorCount,
+                              pipeline: cellTextPipeline, texture: colorAtlas.texture, encoder: encoder, viewport: viewport)
+            drawVertexBuffers(rows: rows, bufferKey: \.decorationBuffer, countKey: \.decorationCount,
+                              pipeline: cellColorPipeline, texture: nil, encoder: encoder, viewport: viewport)
+            drawImageRows(rows: rows, imageKey: \.placeholderImageBuffers, encoder: encoder, viewport: viewport)
+            drawImageRows(rows: rows, imageKey: \.overImageBuffers, encoder: encoder, viewport: viewport)
+            drawImageRows(rows: rows, imageKey: \.otherImageBuffers, encoder: encoder, viewport: viewport)
+        }
+
+        if !drawData.cursorColorVertices.isEmpty, let buffer = makeBuffer(drawData.cursorColorVertices) {
+            encoder.setRenderPipelineState(colorPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            var viewportVar = viewport
+            encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorColorVertices.count)
+        }
+        if !drawData.cursorGlyphVerticesGray.isEmpty, let buffer = makeBuffer(drawData.cursorGlyphVerticesGray) {
+            encoder.setRenderPipelineState(textGrayPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            var viewportVar = viewport
+            encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.setFragmentTexture(grayscaleAtlas.texture, index: 0)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorGlyphVerticesGray.count)
+        }
+        if !drawData.cursorGlyphVerticesColor.isEmpty, let buffer = makeBuffer(drawData.cursorGlyphVerticesColor) {
+            encoder.setRenderPipelineState(textPipeline)
+            encoder.setVertexBuffer(buffer, offset: 0, index: 0)
+            var viewportVar = viewport
+            encoder.setVertexBytes(&viewportVar, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+            encoder.setFragmentTexture(colorAtlas.texture, index: 0)
+            encoder.setFragmentSamplerState(sampler, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawData.cursorGlyphVerticesColor.count)
+        }
+        encoder.endEncoding()
+    }
+
+#if DEBUG
+    /// Renders the current terminal state into a CPU-readable texture without
+    /// attaching the MTKView to a window.  XCTest uses this to assert pixels
+    /// from the same Metal pipelines used by normal presentation.
+    func renderOffscreenForTesting(scale: CGFloat) throws -> MTLTexture {
+        guard let terminalView else { throw MetalError.deviceUnavailable }
+        let width = max(1, Int((terminalView.bounds.width * scale).rounded()))
+        let height = max(1, Int((terminalView.bounds.height * scale).rounded()))
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm,
+                                                                   width: width,
+                                                                   height: height,
+                                                                   mipmapped: false)
+        descriptor.usage = [.renderTarget]
+        descriptor.storageMode = .shared
+        guard let texture = device.makeTexture(descriptor: descriptor),
+              let commandBuffer = commandQueue.makeCommandBuffer() else {
+            throw MetalError.commandQueueUnavailable
+        }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = texture
+        let background = colorToSIMD(terminalView.effectiveNativeBackgroundColor)
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(Double(background.x), Double(background.y), Double(background.z), Double(background.w))
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            throw MetalError.pipelineCreationFailed("offscreen render encoder")
+        }
+        bufferPool.beginFrame()
+        encodeDrawData(buildDrawData(scale: scale), encoder: encoder,
+                       viewport: SIMD2<Float>(Float(width), Float(height)))
+        bufferPool.commit(commandBuffer: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else {
+            throw MetalError.pipelineCreationFailed("offscreen frame")
+        }
+        return texture
+    }
+#endif
 
 
     /// Worst case before the working set is stable: a few grows
@@ -924,11 +923,33 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
                                              firstRow: firstRow,
                                              lastRow: lastRow)
 
+        // These four quads follow every full-cell background and precede
+        // glyphs. Keep them outside the row cache: frame geometry can change
+        // when a different row changes, without invalidating a cached side row.
+        var frameBackgroundMasks: [ColorCell] = []
+        if let color = terminalView.simpleFrameOuterBackground {
+            let exterior = colorToSIMD(color)
+            frameBackgroundMasks = terminalView.simpleFrameBackgroundRects(scale: scale,
+                                                                           firstRow: firstRow,
+                                                                           lastRow: lastRow,
+                                                                           yDisp: visibleDisp).map {
+                makeColorCell(x0: Float($0.minX), y0: Float($0.minY),
+                              x1: Float($0.maxX), y1: Float($0.maxY),
+                              color: exterior)
+            }
+        }
+        if frameData != nil {
+            // The saver aggregates a frame: append to its existing background
+            // batch, so masking adds no render pass or draw call.
+            frameData?.backgroundCells.append(contentsOf: frameBackgroundMasks)
+        }
+
         return DrawData(rows: rows,
                         frame: frameData,
                         cursorColorVertices: cursorData.colorVertices,
                         cursorGlyphVerticesGray: cursorData.glyphVerticesGray,
-                        cursorGlyphVerticesColor: cursorData.glyphVerticesColor)
+                        cursorGlyphVerticesColor: cursorData.glyphVerticesColor,
+                        frameBackgroundMasks: frameBackgroundMasks)
     }
 
     private func intersect(_ range: ClosedRange<Int>?, _ other: ClosedRange<Int>) -> ClosedRange<Int>? {
@@ -3214,7 +3235,11 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
         for container in containerBundles {
             let urls = [
                 container.resourceURL?.appendingPathComponent(bundleName),
-                container.bundleURL.appendingPathComponent(bundleName)
+                container.bundleURL.appendingPathComponent(bundleName),
+                // SwiftPM's XCTest bundle is a sibling of the target resource
+                // bundle in `.build/.../debug`, not its parent.  This also
+                // covers test hosts that place package bundles beside .xctest.
+                container.bundleURL.deletingLastPathComponent().appendingPathComponent(bundleName)
             ]
             for url in urls.compactMap({ $0 }) {
                 if let resourceBundle = Bundle(url: url),
