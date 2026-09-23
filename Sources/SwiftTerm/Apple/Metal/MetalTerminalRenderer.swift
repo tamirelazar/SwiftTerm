@@ -550,7 +550,25 @@ final class MetalTerminalRenderer: NSObject, MTKViewDelegate {
             self?.recordPresentedFrame()
         }
 #endif
+        var remoteDrawable: CAMetalDrawable?
+        if let remoteLayer = terminalView.remoteMetalLayer,
+           let candidate = remoteLayer.nextDrawable(),
+           candidate.texture.width == drawable.texture.width,
+           candidate.texture.height == drawable.texture.height,
+           let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.copy(from: drawable.texture,
+                      sourceSlice: 0, sourceLevel: 0,
+                      sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+                      sourceSize: MTLSize(width: drawable.texture.width,
+                                          height: drawable.texture.height, depth: 1),
+                      to: candidate.texture,
+                      destinationSlice: 0, destinationLevel: 0,
+                      destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.endEncoding()
+            remoteDrawable = candidate
+        }
         commandBuffer.present(drawable)
+        if let remoteDrawable { commandBuffer.present(remoteDrawable) }
         bufferPool.commit(commandBuffer: commandBuffer)
         commandBuffer.commit()
 #if canImport(os)

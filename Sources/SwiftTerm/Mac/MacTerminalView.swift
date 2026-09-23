@@ -222,6 +222,8 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     let interactiveInputDisplayWindowNs: UInt64 = 150_000_000
 #if canImport(MetalKit)
     var metalView: MTKView?
+    /// Optional GPU destination for a native wallpaper remote context.
+    public var remoteMetalLayer: CAMetalLayer?
     var metalRenderer: MetalTerminalRenderer?
     private var retiredMetalRenderers: [MetalTerminalRenderer] = []
     private var automaticMetalRecoveryPolicy = MetalAutomaticRecoveryPolicy()
@@ -498,7 +500,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         mtkView.isPaused = true
         mtkView.enableSetNeedsDisplay = true
         mtkView.autoResizeDrawable = false
-        mtkView.framebufferOnly = true
+        mtkView.framebufferOnly = remoteMetalLayer == nil
         mtkView.colorPixelFormat = .bgra8Unorm
         // Tag the metal layer with sRGB so the compositor color-manages our
         // pixels the same way it color-manages the layer-backed NSView
